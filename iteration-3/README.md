@@ -83,7 +83,6 @@ Note the Agent ARN and Memory ID from the output:
 
 > **⚠️ Important**: Save both the Agent ARN and Memory ID - you'll need them for the SAM deployment.
 
-> **Common Issue**: If you see "IAM role not ready to be assumed", wait 30-60 seconds and retry.
 
 ### 3. Store AWS Systems Manager Parameters
 
