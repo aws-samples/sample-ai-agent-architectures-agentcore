@@ -1,0 +1,12 @@
+# SAM configuration for Iteration 3
+# Run: sam deploy --guided to set parameter values
+
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "iteration3"
+resolve_s3 = true
+s3_prefix = "iteration3"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"

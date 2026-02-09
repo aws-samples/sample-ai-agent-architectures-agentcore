@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Iteration 3: API Gateway + Lambda + AgentCore with Memory'
+
+Parameters:
+  AgentCoreRuntimeArn:
+    Type: String
+    Description: ARN of the deployed AgentCore Runtime agent
+
+  AgentCoreMemoryId:
+    Type: String
+    Description: AgentCore Memory ID for conversation persistence
+
+  CognitoUserPoolArn:
+    Type: String
+    Description: Cognito User Pool ARN for authorizer
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.11
+    MemorySize: 256
+
+Resources:
+  # DynamoDB table for conversation metadata (names)
+  ConversationMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-conversations'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: actor_id
+          AttributeType: S
+        - AttributeName: session_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: actor_id
+          KeyType: HASH
+        - AttributeName: session_id
+          KeyType: RANGE
+
+  # API Gateway with Cognito Authorizer and CORS
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      StageName: prod
+      TracingEnabled: true
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !Ref CognitoUserPoolArn
+
+  # Chat Lambda Function
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-chat'
+      CodeUri: functions/chat/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          AGENTCORE_RUNTIME_ARN: !Ref AgentCoreRuntimeArn
+          CONVERSATION_TABLE: !Ref ConversationMetadataTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - bedrock-agentcore:InvokeAgentRuntime
+              Resource:
+                - !Ref AgentCoreRuntimeArn
+                - !Sub '${AgentCoreRuntimeArn}/*'
+      Events:
+        ChatApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /api/chat
+            Method: POST
+
+  # Conversations Lambda Function
+  ConversationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-conversations'
+      CodeUri: functions/conversations/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          AGENTCORE_MEMORY_ID: !Ref AgentCoreMemoryId
+          CONVERSATION_TABLE: !Ref ConversationMetadataTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - bedrock-agentcore:ListSessions
+                - bedrock-agentcore:ListEvents
+                - bedrock-agentcore:GetEvent
+              Resource: !Sub 'arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/${AgentCoreMemoryId}'
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt ConversationMetadataTable.Arn
+      Events:
+        ListConversations:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /api/conversations
+            Method: GET
+        GetConversation:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /api/conversations/{session_id}
+            Method: GET
+
+  # WAF WebACL for API Gateway
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub '${AWS::StackName}-waf'
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Description: WAF for API Gateway with rate limiting and known bad inputs protection
+      Rules:
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${AWS::StackName}-known-bad-inputs'
+        - Name: RateLimitRule
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${AWS::StackName}-rate-limit'
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${AWS::StackName}-waf'
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn: ApiGatewayprodStage
+    Properties:
+      ResourceArn: !Sub 'arn:aws:apigateway:${AWS::Region}::/restapis/${ApiGateway}/stages/prod'
+      WebACLArn: !GetAtt WebACL.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
+
+  ConversationTableName:
+    Description: DynamoDB table for conversation metadata
+    Value: !Ref ConversationMetadataTable
+
+  ChatFunctionArn:
+    Description: Chat Lambda function ARN
+    Value: !GetAtt ChatFunction.Arn
+
+  ConversationsFunctionArn:
+    Description: Conversations Lambda function ARN
+    Value: !GetAtt ConversationsFunction.Arn
+
+  WebACLArn:
+    Description: WAF WebACL ARN
+    Value: !GetAtt WebACL.Arn

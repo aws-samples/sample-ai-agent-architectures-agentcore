@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Pattern 1: API Gateway with WAF for AgentCore Runtime
+  Deploy this after Cognito and Agent are configured.
+
+Parameters:
+  AgentRuntimeId:
+    Type: String
+    Description: AgentCore Runtime ID (e.g., myagent-abc123)
+
+  CognitoStackName:
+    Type: String
+    Default: agentcore-cognito
+    Description: Name of the Cognito CloudFormation stack
+
+  ResourcePrefix:
+    Type: String
+    Default: apigw-agentcore
+    Description: Prefix for resource names
+    AllowedPattern: '[a-z0-9-]+'
+
+  RateLimitPerIP:
+    Type: Number
+    Default: 100
+    Description: Maximum requests per 5 minutes per IP address
+    MinValue: 10
+    MaxValue: 10000
+
+Resources:
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub ${ResourcePrefix}-api
+      Description: API Gateway proxy to AgentCore Runtime with Cognito auth and streaming
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuthorizer
+      Type: COGNITO_USER_POOLS
+      RestApiId: !Ref RestApi
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - Fn::ImportValue: !Sub ${CognitoStackName}-UserPoolArn
+
+  ChatResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: chat
+
+  ChatOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref ChatResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amzn-Bedrock-AgentCore-Runtime-Session-Id'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ChatPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref ChatResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      RequestParameters:
+        method.request.header.Authorization: true
+        method.request.header.X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: false
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/${AgentRuntimeId}/invocations?qualifier=DEFAULT&accountId=${AWS::AccountId}
+        ConnectionType: INTERNET
+        TimeoutInMillis: 29000
+        RequestParameters:
+          integration.request.header.Authorization: method.request.header.Authorization
+          integration.request.header.X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: method.request.header.X-Amzn-Bedrock-AgentCore-Runtime-Session-Id
+        ResponseTransferMode: STREAM
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: true
+        - StatusCode: '400'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: '401'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: '500'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ChatPostMethod
+      - ChatOptionsMethod
+    Properties:
+      RestApiId: !Ref RestApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+      Description: Production stage
+      TracingEnabled: true
+
+  GatewayResponseUnauthorized:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref RestApi
+      ResponseType: UNAUTHORIZED
+      StatusCode: '401'
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+
+  GatewayResponseAccessDenied:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref RestApi
+      ResponseType: ACCESS_DENIED
+      StatusCode: '403'
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+
+  GatewayResponseDefault5xx:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref RestApi
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub ${ResourcePrefix}-waf
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Description: WAF for API Gateway with rate limiting and known bad inputs protection
+      Rules:
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub ${ResourcePrefix}-known-bad-inputs
+        - Name: RateLimitRule
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitPerIP
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub ${ResourcePrefix}-rate-limit
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub ${ResourcePrefix}-waf
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn: ApiStage
+    Properties:
+      ResourceArn: !Sub arn:aws:apigateway:${AWS::Region}::/restapis/${RestApi}/stages/prod
+      WebACLArn: !GetAtt WebACL.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/chat
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiEndpoint
+
+  WebACLArn:
+    Description: WAF WebACL ARN
+    Value: !GetAtt WebACL.Arn

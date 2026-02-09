@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Shared infrastructure for AgentCore samples - Cognito User Pool and IAM roles.
+  Deploy this first before any iteration.
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: apigw-agentcore
+    Description: Prefix for resource names
+    AllowedPattern: '[a-z0-9-]+'
+
+  CallbackUrl:
+    Type: String
+    Default: http://localhost:8000/callback.html
+    Description: OAuth callback URL for Cognito hosted UI
+
+Resources:
+  # =============================================================================
+  # Cognito User Pool
+  # =============================================================================
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${ResourcePrefix}-user-pool
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub ${ResourcePrefix}-${AWS::AccountId}
+      UserPoolId: !Ref UserPool
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub ${ResourcePrefix}-client
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - !Ref CallbackUrl
+        - http://localhost:8000
+      LogoutURLs:
+        - http://localhost:8000
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  # =============================================================================
+  # AgentCore Execution Role (for IAM-authenticated agents in iteration-2/3)
+  # =============================================================================
+  AgentCoreExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourcePrefix}-agentcore-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AgentCoreRuntimePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Bedrock model invocation (Claude Haiku for agents)
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0
+                  - arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0
+              # CloudWatch Logs for agent observability
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/*
+              # X-Ray tracing
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: '*'
+              # S3 for code deployment
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::bedrock-agentcore-*/${ResourcePrefix}/*
+              # AgentCore Runtime invocation (iteration-2/3)
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:InvokeAgentRuntime
+                Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/*
+              # AgentCore Memory operations (iteration-3)
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:CreateEvent
+                  - bedrock-agentcore:GetEvent
+                  - bedrock-agentcore:ListEvents
+                Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/*
+              # SSM Parameter Store (agent reads memory-id and table name)
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/agentcore/*
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dynamo/*
+              # DynamoDB for conversation metadata (iteration-3 agent writes names)
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/iteration3-conversations
+
+Outputs:
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolArn
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
+
+  CognitoDomain:
+    Description: Cognito Hosted UI Domain
+    Value: !Sub https://${ResourcePrefix}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com
+    Export:
+      Name: !Sub ${AWS::StackName}-CognitoDomain
+
+  OAuthDiscoveryUrl:
+    Description: OpenID Connect discovery URL (use this for agent authorizer config)
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/openid-configuration
+    Export:
+      Name: !Sub ${AWS::StackName}-OAuthDiscoveryUrl
+
+  AgentCoreExecutionRoleArn:
+    Description: IAM Role ARN for AgentCore Runtime (use for IAM-authenticated agents)
+    Value: !GetAtt AgentCoreExecutionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-AgentCoreExecutionRoleArn

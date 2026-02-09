@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Iteration 2 - API Gateway + Lambda + AgentCore</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+    .header { padding: 1rem; background: #16213e; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1.2rem; }
+    .user-info { font-size: 0.85rem; color: #888; }
+    .container { flex: 1; display: flex; flex-direction: column; max-width: 800px; margin: 0 auto; width: 100%; padding: 1rem; }
+    .messages { flex: 1; overflow-y: auto; padding: 1rem 0; }
+    .message { margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; }
+    .message.user { background: #0f3460; margin-left: auto; }
+    .message.assistant { background: #16213e; border: 1px solid #333; }
+    .input-area { display: flex; gap: 0.5rem; padding: 1rem 0; }
+    .input-area input { flex: 1; padding: 0.75rem; border: 1px solid #333; border-radius: 4px; background: #0f3460; color: #eee; }
+    .input-area input:focus { outline: none; border-color: #e94560; }
+    .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; background: #e94560; color: white; }
+    .btn:hover { background: #d63850; }
+    .login-container { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; }
+    .login-container p { color: #888; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🤖 Iteration 2: API Gateway + Lambda + AgentCore</h1>
+    <div>
+      <span id="userInfo" class="user-info"></span>
+      <button id="authBtn" class="btn" onclick="handleAuth()">Login</button>
+    </div>
+  </div>
+
+  <div id="loginView" class="login-container">
+    <h2>Welcome</h2>
+    <p>Login with Cognito to chat with the agent</p>
+    <button class="btn" onclick="handleAuth()">Login with Cognito</button>
+  </div>
+
+  <div id="chatView" class="container" style="display: none;">
+    <div id="messages" class="messages"></div>
+    <div class="input-area">
+      <input type="text" id="messageInput" placeholder="Type a message..." onkeypress="if(event.key==='Enter')sendMessage()">
+      <button class="btn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // CONFIGURATION - Update after deploying infrastructure
+    // ============================================================
+    const CONFIG = {
+      cognitoDomain: 'apigw-agentcore-<YOUR_ACCOUNT_ID>.auth.<YOUR_REGION>.amazoncognito.com',
+      clientId: '<YOUR_CLIENT_ID>',
+      redirectUri: 'http://localhost:8000',
+      // API Gateway endpoint
+      apiEndpoint: 'https://<YOUR_API_ID>.execute-api.<YOUR_REGION>.amazonaws.com/prod'
+    };
+
+    let idToken = null;
+
+    function handleAuth() {
+      if (idToken) {
+        idToken = null;
+        sessionStorage.clear();
+        updateUI();
+      } else {
+        const authUrl = `https://${CONFIG.cognitoDomain}/oauth2/authorize?` +
+          `client_id=${CONFIG.clientId}&response_type=code&scope=openid+profile+email&` +
+          `redirect_uri=${encodeURIComponent(CONFIG.redirectUri)}`;
+        window.location.href = authUrl;
+      }
+    }
+
+    async function exchangeCodeForTokens(code) {
+      const tokenUrl = `https://${CONFIG.cognitoDomain}/oauth2/token`;
+      const params = new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CONFIG.clientId,
+        code: code,
+        redirect_uri: CONFIG.redirectUri
+      });
+
+      try {
+        const response = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params
+        });
+        if (!response.ok) throw new Error('Token exchange failed');
+        const tokens = await response.json();
+        idToken = tokens.id_token;
+        sessionStorage.setItem('idToken', idToken);
+        window.history.replaceState({}, document.title, CONFIG.redirectUri);
+        updateUI();
+      } catch (error) {
+        console.error('Token exchange error:', error);
+        alert('Authentication failed');
+      }
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const message = input.value.trim();
+      if (!message || !idToken) return;
+
+      input.value = '';
+      addMessage(message, 'user');
+
+      try {
+        const response = await fetch(`${CONFIG.apiEndpoint}/chat`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': idToken
+          },
+          body: JSON.stringify({ message })
+        });
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        addMessage(data.response, 'assistant');
+      } catch (error) {
+        console.error('Chat error:', error);
+        addMessage(`Error: ${error.message}`, 'assistant');
+      }
+    }
+
+    function addMessage(text, type) {
+      const messagesEl = document.getElementById('messages');
+      const div = document.createElement('div');
+      div.className = `message ${type}`;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function updateUI() {
+      const loginView = document.getElementById('loginView');
+      const chatView = document.getElementById('chatView');
+      const authBtn = document.getElementById('authBtn');
+      const userInfo = document.getElementById('userInfo');
+
+      if (idToken) {
+        loginView.style.display = 'none';
+        chatView.style.display = 'flex';
+        authBtn.textContent = 'Logout';
+        try {
+          const payload = JSON.parse(atob(idToken.split('.')[1]));
+          userInfo.textContent = payload.email || 'Logged in';
+        } catch { userInfo.textContent = 'Logged in'; }
+      } else {
+        loginView.style.display = 'flex';
+        chatView.style.display = 'none';
+        authBtn.textContent = 'Login';
+        userInfo.textContent = '';
+      }
+    }
+
+    function init() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      if (code) { exchangeCodeForTokens(code); return; }
+      idToken = sessionStorage.getItem('idToken');
+      updateUI();
+    }
+
+    init();
+  </script>
+</body>
+</html>
