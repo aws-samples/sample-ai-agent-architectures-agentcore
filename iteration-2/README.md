@@ -5,7 +5,7 @@ The AWS Lambda uses IAM to call the agent - users can't bypass the API layer.
 
 ## Architecture
 
-![IAM integration with AgentCore Runtime](images/iteration_2.png)
+![IAM integration with AgentCore Runtime](../images/iteration_2.png)
 
 
 ## What is different with this iteration?

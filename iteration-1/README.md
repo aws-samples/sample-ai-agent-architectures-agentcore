@@ -4,7 +4,7 @@ Amazon API Gateway in front of Amazon Bedrock AgentCore Runtime with Amazon Cogn
 
 ## Architecture
 
-![OAuth integration with AgentCore Runtime](images/oauth_waf_apigateway_agent.png)
+![OAuth integration with AgentCore Runtime](../images/oauth_waf_apigateway_agent.png)
 
 
 ## Key Concepts

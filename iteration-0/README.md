@@ -5,7 +5,7 @@ This first pattern shows the simplest setup that most tutorials show - a static 
 This pattern breaks down in production, and does not account for production level concerns for a web based AI agent. The following iterations fix the gaps introduced by this direct client to agent pattern.
 
 ## Architecture
-![Direct client to agent architecture](images/client_to_agent_arch.png)
+![Direct client to agent architecture](../images/client_to_agent_arch.png)
 
 ## Components
 

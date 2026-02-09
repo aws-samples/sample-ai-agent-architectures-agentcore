@@ -4,7 +4,7 @@ Full-featured chat application with conversation persistence and auto-generated 
 
 ## Architecture
 
-![IAM integration with AgentCore Runtime with additional functionality for memory](images/iteration_3.png)
+![IAM integration with AgentCore Runtime with additional functionality for memory](../images/iteration_3.png)
 
 
 ## Features
