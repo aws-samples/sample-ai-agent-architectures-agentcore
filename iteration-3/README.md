@@ -72,6 +72,8 @@ When prompted during configuration:
 
 > **Important**: Iteration-3 uses IAM authentication (not OAuth). The AWS Lambda calls the agent using its IAM role. Memory is required for conversation persistence.
 
+> **Note**: Direct Code Deploy requires both `uv` and the `zip` CLI on your machine (`zip` doesn't ship with Windows - install it with `choco install zip` or use WSL). If either is missing, the CLI silently falls back to **container deployment**, which needs ECR permissions the shared execution role doesn't include, and the deploy fails with an ECR validation error.
+
 Then deploy:
 ```bash
 agentcore deploy

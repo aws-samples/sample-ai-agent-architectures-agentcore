@@ -105,6 +105,10 @@ When prompted during configuration:
 - **Request header allowlist**: `no`
 - **Memory**: `s` (skip)
 
+> **Important**: Direct Code Deploy requires both `uv` and the `zip` CLI on your machine (`zip` doesn't ship with Windows - install it with `choco install zip` or use WSL). If either is missing, the CLI prints a brief warning and silently falls back to **container deployment**, which needs ECR permissions the execution role doesn't have, and the deploy fails with an ECR validation error.
+
+> **Warning**: Don't enter your client ID at the "Allowed OAuth client IDs" prompt. The frontend sends a Cognito ID token, which carries the client ID in its `aud` claim (not `client_id`), so an agent configured with allowed client IDs rejects it with "Claim 'client_id' value mismatch". The client ID belongs in the **audience** field only.
+
 Then run:
 
 ```bash

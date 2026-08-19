@@ -102,10 +102,13 @@ Browser → Amazon API Gateway → AWS Lambda (Chat) → Amazon Bedrock AgentCor
 - AWS CLI configured with credentials (`aws configure`)
 - AWS SAM CLI installed ([installation guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html))
 - Python 3.11+ (`python3 --version` to check)
-- AgentCore CLI (`pip install bedrock-agentcore`)
+- AgentCore CLI (`pip install bedrock-agentcore-starter-toolkit`)
+- `uv` installed ([installation guide](https://docs.astral.sh/uv/getting-started/installation/)) and the `zip` CLI available - both are required for Direct Code Deploy
 - Bedrock model access enabled in your AWS account (Claude models)
 
 > **Tip**: Run `aws sts get-caller-identity` to verify your AWS credentials are working before starting.
+
+> **Windows users**: The `zip` CLI doesn't ship with Windows (install it with `choco install zip` or `scoop install zip`, or use WSL). If `uv` or `zip` is missing, `agentcore configure` prints a brief warning and silently falls back to **container deployment**, which requires ECR permissions that the execution roles in this repo don't include - your deploy will then fail with an ECR validation error. Install both tools before configuring any agent.
 
 ## Getting Started
 

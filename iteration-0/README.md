@@ -16,7 +16,8 @@ This pattern breaks down in production, and does not account for production leve
 ## Prerequisites
 
 - AWS CLI configured with credentials (`aws configure`)
-- AgentCore CLI installed (`pip install bedrock-agentcore`)
+- AgentCore CLI installed (`pip install bedrock-agentcore-starter-toolkit`)
+- `uv` and the `zip` CLI installed (required for Direct Code Deploy - see note in step 3)
 
 > **Tip**: Verify your setup with `aws sts get-caller-identity` and `agentcore --version`
 
@@ -110,6 +111,9 @@ When prompted during configuration:
 - **Request header allowlist**: `no`
 - **Memory**: `s` (skip)
 
+> **Important**: Direct Code Deploy requires both `uv` and the `zip` CLI on your machine (`zip` doesn't ship with Windows - install it with `choco install zip` or use WSL). If either is missing, the CLI prints a brief warning and silently falls back to **container deployment**, which needs ECR permissions the execution role doesn't have, and the deploy fails with an ECR validation error.
+
+> **Warning**: Don't enter your client ID at the "Allowed OAuth client IDs" prompt. The frontend sends a Cognito ID token, which carries the client ID in its `aud` claim (not `client_id`), so an agent configured with allowed client IDs rejects it with "Claim 'client_id' value mismatch". The client ID belongs in the **audience** field only.
 
 Then deploy:
 ```bash
@@ -150,6 +154,7 @@ Open http://localhost:8000 and login with `<YOUR_USERNAME_HERE>` / `<YOUR_PASSWO
 
 > **Troubleshooting**:
 > - **"Claim 'aud' value mismatch"**: The `clientId` in your frontend CONFIG doesn't match what the agent expects. Double-check the CLIENT_ID from step 1.
+> - **"Claim 'client_id' value mismatch"**: You entered the client ID at the "Allowed OAuth client IDs" prompt during `agentcore configure`. Re-run `agentcore configure` with that prompt left empty and the CLIENT_ID in the audience field instead, then `agentcore deploy`.
 > - **Login redirects but nothing happens**: Check browser console for errors. Ensure `redirectUri` matches exactly (including trailing slash or lack thereof).
 > - **CORS errors**: Make sure you're accessing via `http://localhost:8000`, not `127.0.0.1:8000`.
 
